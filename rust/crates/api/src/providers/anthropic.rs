@@ -740,8 +740,31 @@ fn now_unix_timestamp() -> u64 {
 fn read_env_non_empty(key: &str) -> Result<Option<String>, ApiError> {
     match std::env::var(key) {
         Ok(value) if !value.is_empty() => Ok(Some(value)),
-        Ok(_) | Err(std::env::VarError::NotPresent) => Ok(super::dotenv_value(key)),
+        Ok(_) | Err(std::env::VarError::NotPresent) => {
+            Ok(super::dotenv_value(key).or_else(|| settings_json_env_value(key)))
+        }
         Err(error) => Err(ApiError::from(error)),
+    }
+}
+
+/// Read a value from the `"env"` object in `~/.claude/settings.json`.
+/// Respects `CLAUDE_CONFIG_HOME` to override the `~/.claude` directory
+/// (primarily for test isolation).
+fn settings_json_env_value(key: &str) -> Option<String> {
+    let config_home = if let Some(path) = std::env::var_os("CLAUDE_CONFIG_HOME") {
+        std::path::PathBuf::from(path)
+    } else {
+        let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+        std::path::PathBuf::from(home).join(".claude")
+    };
+    let settings_path = config_home.join("settings.json");
+    let content = std::fs::read_to_string(&settings_path).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let value = json.get("env")?.get(key)?.as_str()?;
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_owned())
     }
 }
 
@@ -1081,11 +1104,13 @@ mod tests {
         std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
         std::env::remove_var("ANTHROPIC_API_KEY");
         std::env::remove_var("CLAW_CONFIG_HOME");
+        std::env::set_var("CLAUDE_CONFIG_HOME", std::env::temp_dir().join("no-such-claude-cfg-dir"));
         let error = super::read_api_key().expect_err("missing key should error");
         assert!(matches!(
             error,
             crate::error::ApiError::MissingCredentials { .. }
         ));
+        std::env::remove_var("CLAUDE_CONFIG_HOME");
     }
 
     #[test]
@@ -1093,12 +1118,14 @@ mod tests {
         let _guard = env_lock();
         std::env::set_var("ANTHROPIC_AUTH_TOKEN", "");
         std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::set_var("CLAUDE_CONFIG_HOME", std::env::temp_dir().join("no-such-claude-cfg-dir"));
         let error = super::read_api_key().expect_err("empty key should error");
         assert!(matches!(
             error,
             crate::error::ApiError::MissingCredentials { .. }
         ));
         std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
+        std::env::remove_var("CLAUDE_CONFIG_HOME");
     }
 
     #[test]
@@ -1153,6 +1180,7 @@ mod tests {
         std::env::set_var("CLAW_CONFIG_HOME", &config_home);
         std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
         std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::set_var("CLAUDE_CONFIG_HOME", std::env::temp_dir().join("no-such-claude-cfg-dir"));
         save_oauth_credentials(&runtime::OAuthTokenSet {
             access_token: "saved-access-token".to_string(),
             refresh_token: Some("refresh".to_string()),
@@ -1166,6 +1194,7 @@ mod tests {
 
         clear_oauth_credentials().expect("clear credentials");
         std::env::remove_var("CLAW_CONFIG_HOME");
+        std::env::remove_var("CLAUDE_CONFIG_HOME");
         cleanup_temp_config_home(&config_home);
     }
 
