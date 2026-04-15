@@ -12,7 +12,8 @@ default:
 # Environment setup
 # ---------------------------------------------------------------------------
 
-# Install / verify the full development toolchain (cargo + uv)
+# Install / verify the full development toolchain (cargo + uv).
+# In CI, tools are pre-installed by workflow steps; this recipe is for local dev.
 setup:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -34,7 +35,7 @@ setup:
         echo "    uv not found – installing via cargo …"
         cargo install --locked uv
     fi
-    echo "    uv $(uv --version)"
+    echo "    $(uv --version 2>&1)"
 
     echo "==> Environment is ready."
 
